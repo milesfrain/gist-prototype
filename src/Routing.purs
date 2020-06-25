@@ -1,7 +1,7 @@
 module MyRouting where
 
 import Prelude
-import Common (AuthCode(..), Compressed(..), GistID(..))
+import Common (AuthCode(..), Compressed(..), GistID(..), appRootNoSlash)
 import Data.Foldable (oneOf)
 import Data.Generic.Rep (class Generic)
 import Data.Generic.Rep.Show (genericShow)
@@ -19,9 +19,9 @@ instance showMyRoute :: Show MyRoute where
 
 myRoute :: Match MyRoute
 myRoute =
-  root
+  root *> lit appRootNoSlash
     *> oneOf
-        [ AuthorizeCallback <$> (AuthCode <$> (lit "callback" *> param "code")) <*> (Compressed <$> param "comp")
+        [ AuthorizeCallback <$> (AuthCode <$> param "code") <*> (Compressed <$> param "comp")
         , LoadCompressed <$> Compressed <$> param "comp"
         , LoadGist <$> GistID <$> param "gist"
         ]

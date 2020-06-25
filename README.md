@@ -12,3 +12,8 @@ See the [Authorizing OAuth Apps](https://developer.github.com/apps/building-oaut
 
 I'm using Azure Functions to host this backend. See the `azure` folder for more details.
 
+### Deploy
+```
+npm run build-prod
+gh-pages -d dist
+```

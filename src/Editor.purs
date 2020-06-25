@@ -1,7 +1,7 @@
 module Editor where
 
 import Prelude
-import Common (Compressed(..), Content(..), GistID(..), Token)
+import Common (Compressed(..), Content(..), GistID(..), Token, appDomain, appRootWithSlash)
 import Control.Monad.State (class MonadState)
 import Data.Either (Either(..))
 import Data.Maybe (Maybe(..))
@@ -26,12 +26,17 @@ type SetRoute
 type Input
   = SetRoute
 
+data GistStatus
+  = NoGist
+  | SavingGist
+  | HaveGist GistID
+
 -- Will assume token is valid if it exists. May refresh to reset.
 type State
   = { route :: Maybe MyRoute
     , token :: Maybe Token
     , setRoute :: SetRoute
-    , gistID :: Maybe GistID
+    , gistID :: GistStatus
     , content :: Content
     }
 
@@ -40,7 +45,7 @@ initialState setRoute =
   { route: Nothing
   , token: Nothing
   , setRoute
-  , gistID: Nothing
+  , gistID: NoGist
   , content: Content "Welcome"
   }
 
@@ -75,13 +80,14 @@ render :: forall m. MonadAff m => State -> H.ComponentHTML Action () m
 render state =
   let
     gistButtonOrLink = case state.gistID of
-      Nothing ->
+      NoGist ->
         HH.button
           [ HE.onClick \_ -> Just SaveGist
           ]
           [ HH.text "Save Gist"
           ]
-      Just (GistID id) ->
+      SavingGist -> HH.text "Saving Gist ..."
+      HaveGist (GistID id) ->
         HH.a
           [ HP.href $ "https://gist.github.com/" <> id
           , HP.target "_blank" -- Open in new tab
@@ -106,10 +112,11 @@ handleQuery (Nav route a) = do
   H.modify_ _ { route = Just route }
   case route of
     AuthorizeCallback authCode compressed -> do
-      -- Todo - should probably render a "saving" dialog or something
       log "in auth callback"
-      -- Immediately show new content
-      H.modify_ _ { content = decompress compressed }
+      -- Immediately show new content.
+      -- This also requires setting saving flag again, since state
+      -- is reset upon page refresh from callback.
+      H.modify_ _ { content = decompress compressed, gistID = SavingGist }
       -- Make token request to private app server
       res <- liftAff $ ghRequestToken authCode
       case res of
@@ -131,7 +138,7 @@ handleQuery (Nav route a) = do
           Left err -> Content err
           Right c -> c
       log $ "Got content from gist: " <> show content
-      H.modify_ _ { content = content, gistID = Just gistId }
+      H.modify_ _ { content = content, gistID = HaveGist gistId }
   -- Required boilerplate for handleQuery
   pure (Just a)
 
@@ -144,23 +151,23 @@ doSaveGist token = do
   case eitherId of
     Left err -> log err
     Right id -> do
-      H.modify_ _ { gistID = Just id }
-      liftEffect $ st.setRoute $ "/?gist=" <> (show id)
+      H.modify_ _ { gistID = HaveGist id }
+      liftEffect $ st.setRoute $ appRootWithSlash <> "/?gist=" <> (show id)
 
 handleAction ∷ forall o m. MonadAff m => Action -> H.HalogenM State Action () o m Unit
 handleAction = case _ of
   SaveGist -> do
+    -- Immediately show "saving" status
+    H.modify_ _ { gistID = SavingGist }
     st <- H.get
-    log $ "incoming content in SaveGist: " <> show st.content
     case st.token of
       Nothing -> liftEffect $ ghAuthorize st.content
       Just token -> doSaveGist token
   -- New content clears existing gistID
   SetContent content -> do
     st <- H.get
-    log $ "writing in SetContent: " <> show content
-    H.modify_ _ { gistID = Nothing, content = content }
-    liftEffect $ st.setRoute $ "/?comp=" <> (show $ compress content)
+    H.modify_ _ { gistID = NoGist, content = content }
+    liftEffect $ st.setRoute $ appRootWithSlash <> "/?comp=" <> (show $ compress content)
 
 ghAuthorize :: Content -> Effect Unit
 ghAuthorize content = do
@@ -171,7 +178,9 @@ ghAuthorize content = do
     authUrl =
       "https://github.com/login/oauth/authorize?"
         <> "client_id=bbaa8fdc61cceb40c899&scope=gist"
-        <> "&redirect_uri=http://localhost:1234/callback"
-        <> "?comp="
+        <> "&redirect_uri="
+        <> appDomain
+        <> appRootWithSlash
+        <> "/?comp="
         <> (show $ compress content)
   setHref authUrl loc
